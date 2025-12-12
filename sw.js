@@ -1,5 +1,5 @@
 const BASE = new URL("./", self.location).pathname;
-const CACHE = "24hcd-pwa-v11"; // mỗi lần cập nhật lớn, tăng số này để tránh cache cũ gây trắng
+const CACHE = "24hcd-pwa-v15"; // mỗi lần cập nhật lớn, tăng số này để tránh cache cũ gây trắng
 
 const STATIC_ASSETS = [
   BASE,
