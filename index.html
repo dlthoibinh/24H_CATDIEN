@@ -5,17 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>24h CẮT ĐIỆN</title>
 
-  <!-- Manifest & PWA -->
   <link rel="manifest" href="manifest.webmanifest">
   <meta name="theme-color" content="#0ea5e9">
   <link rel="apple-touch-icon" href="evn_logo.png">
   <link rel="canonical" href="https://dlthoibinh.github.io/24H_CATDIEN/">
 
-  <!-- iOS -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
-  <!-- CSP: cấm mixed-content, chỉ cho phép những domain cần -->
   <meta http-equiv="Content-Security-Policy"
         content="
           default-src 'self';
@@ -29,24 +26,57 @@
           block-all-mixed-content;
         ">
 
+  <link rel="preconnect" href="https://script.google.com">
+  <link rel="preconnect" href="https://script.googleusercontent.com">
 
   <style>
     html,body{height:100%;margin:0;background:#f6f7fb;font-family:system-ui,Roboto,Arial}
     .app{position:fixed;inset:0;display:flex;flex-direction:column}
-    #wrap{flex:1;position:relative}
-    iframe{position:absolute;inset:0;border:0;width:100%;height:100%}
+    #wrap{flex:1;position:relative;background:#f6f7fb}
+    iframe{position:absolute;inset:0;border:0;width:100%;height:100%;background:#fff}
+
+    .overlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:#ffffff}
+    .overlay.show{display:flex}
+    .card{width:min(520px,92vw);border:1px solid #e5e7eb;border-radius:16px;padding:14px 14px 12px;background:#fff;box-shadow:0 12px 30px rgba(0,0,0,.08)}
+    .row{display:flex;gap:12px;align-items:center}
+    .spinner{width:22px;height:22px;border-radius:50%;border:3px solid #e5e7eb;border-top-color:#0ea5e9;animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .status{font-weight:800}
+    .hint{margin-top:6px;color:#6b7280;font-size:13px;line-height:1.35}
+    .actions{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap}
+    button{padding:10px 14px;border-radius:999px;border:1px solid #e5e7eb;background:#fff;font-weight:800;cursor:pointer}
+    button.primary{background:#0ea5e9;border-color:#0ea5e9;color:#fff}
+
     .offline{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:#fff}
     .offline.show{display:flex}
-    .offline button{padding:10px 14px;border-radius:999px;border:1px solid #e5e7eb;background:#fff;font-weight:800;cursor:pointer}
   </style>
 </head>
+
 <body>
   <div class="app">
     <div id="wrap">
+
       <iframe id="app"
-        src="https://script.google.com/macros/s/AKfycbxXRbDDCz6J21IRJeskHvVtIuKtofn7ZTM8Y0ndw62drizcpAgwGn1TGQplfkx929Rg/exec"
-        allow="geolocation *; fullscreen *; camera *; microphone *; clipboard-read; clipboard-write; accelerometer; gyroscope; magnetometer"
-        referrerpolicy="no-referrer"></iframe>
+        src="about:blank"
+        loading="eager"
+        allow="geolocation *; fullscreen *; camera *; microphone *; clipboard-read; clipboard-write; accelerometer; gyroscope; magnetometer; storage-access-by-user-activation *">
+      </iframe>
+
+      <div id="overlay" class="overlay show">
+        <div class="card">
+          <div class="row">
+            <div class="spinner"></div>
+            <div>
+              <div id="status" class="status">Đang tải ứng dụng…</div>
+              <div id="hint" class="hint">Nếu treo lâu, bấm Tải lại hoặc Mở ngoài trình duyệt.</div>
+            </div>
+          </div>
+          <div class="actions">
+            <button id="btnReload" class="primary">Tải lại</button>
+            <button id="btnOpen">Mở ngoài trình duyệt</button>
+          </div>
+        </div>
+      </div>
 
       <div id="offline" class="offline">
         <div style="text-align:center">
@@ -55,24 +85,122 @@
           <button onclick="location.reload()">Thử lại</button>
         </div>
       </div>
+
     </div>
   </div>
 
   <script>
-    const BASE = (location.pathname.endsWith('/')
-      ? location.pathname
-      : location.pathname.replace(/\/[^/]*$/, '/'));
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbxXRbDDCz6J21IRJeskHvVtIuKtofn7ZTM8Y0ndw62drizcpAgwGn1TGQplfkx929Rg/exec";
+    const GAS_ORIGINS = new Set(["https://script.google.com", "https://script.googleusercontent.com"]);
 
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register(BASE + 'sw.js', { scope: BASE })
-        .then(r => console.log('SW registered:', r.scope))
-        .catch(e => console.warn('SW register failed:', e));
+    const BASE = (location.pathname.endsWith("/")
+      ? location.pathname
+      : location.pathname.replace(/\/[^/]*$/, "/"));
+
+    const $overlay = document.getElementById("overlay");
+    const $status  = document.getElementById("status");
+    const $hint    = document.getElementById("hint");
+    const $iframe  = document.getElementById("app");
+
+    const setOfflineUI = on => document.getElementById("offline").classList.toggle("show", !!on);
+    addEventListener("online",  ()=>setOfflineUI(false));
+    addEventListener("offline", ()=>setOfflineUI(true));
+    setOfflineUI(!navigator.onLine);
+
+    let ready = false;
+    let tries = 0;
+    let watchdog = null;
+
+    function showOverlay(text, hint){
+      $status.textContent = text || "Đang tải ứng dụng…";
+      $hint.textContent = hint || "Nếu treo lâu, bấm Tải lại hoặc Mở ngoài trình duyệt.";
+      $overlay.classList.add("show");
     }
 
-    const setOfflineUI = on => document.getElementById('offline').classList.toggle('show', !!on);
-    addEventListener('online',  ()=>setOfflineUI(false));
-    addEventListener('offline', ()=>setOfflineUI(true));
-    setOfflineUI(!navigator.onLine);
+    function hideOverlay(){
+      $overlay.classList.remove("show");
+    }
+
+    function startWatchdog(){
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        if (ready) return;
+        showOverlay(
+          "Không tải được (màn hình trắng)",
+          "Nguyên nhân hay gặp: iframe bị chặn session/cookie hoặc mạng chập chờn. Bấm Tải lại, hoặc Mở ngoài trình duyệt."
+        );
+        // auto retry nhẹ 1 lần
+        if (tries < 3) loadIframe("retry");
+      }, 20000);
+    }
+
+    function loadIframe(reason){
+      tries += 1;
+      ready = false;
+      showOverlay(`Đang tải ứng dụng… (lần ${tries})`);
+
+      const u = new URL(GAS_URL);
+      u.searchParams.set("source", "pwa");
+      u.searchParams.set("_ts", String(Date.now())); // chống treo do cache/session
+
+      // trick nhỏ: set about:blank trước để ép refresh iframe trên iOS/PWA
+      $iframe.src = "about:blank";
+      requestAnimationFrame(() => { $iframe.src = u.toString(); });
+
+      startWatchdog();
+    }
+
+    // Nếu anh có chèn postMessage "GAS_READY" trong Apps Script (mục 2), overlay sẽ tắt đúng lúc
+    addEventListener("message", (ev) => {
+      if (!GAS_ORIGINS.has(ev.origin)) return;
+      const data = ev.data || {};
+      if (data && data.type === "GAS_READY") {
+        ready = true;
+        clearTimeout(watchdog);
+        hideOverlay();
+      }
+    });
+
+    // Fallback: nếu iframe load xong nhưng không có handshake, vẫn cho qua sau 5s để khỏi kẹt
+    $iframe.addEventListener("load", () => {
+      setTimeout(() => {
+        if (!ready) hideOverlay();
+      }, 5000);
+    });
+
+    document.getElementById("btnReload").addEventListener("click", () => loadIframe("manual"));
+    document.getElementById("btnOpen").addEventListener("click", () => {
+      // mở top-level để né chặn cookie iframe (nhất là iOS/Brave)
+      window.open(GAS_URL, "_blank", "noopener,noreferrer");
+    });
+
+    // Service Worker: auto cập nhật và reload 1 lần khi đổi controller
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register(BASE + "sw.js", { scope: BASE })
+        .then((reg) => {
+          navigator.serviceWorker.addEventListener("controllerchange", () => {
+            // đổi SW => reload để tránh trắng do bản cũ/bản mới lẫn nhau
+            location.reload();
+          });
+
+          // nếu có bản mới đang chờ, bắt nó kích hoạt luôn
+          if (reg.waiting) reg.waiting.postMessage("SKIP_WAITING");
+
+          reg.addEventListener("updatefound", () => {
+            const sw = reg.installing;
+            if (!sw) return;
+            sw.addEventListener("statechange", () => {
+              if (sw.state === "installed" && reg.waiting) {
+                reg.waiting.postMessage("SKIP_WAITING");
+              }
+            });
+          });
+        })
+        .catch((e) => console.warn("SW register failed:", e));
+    }
+
+    // Start
+    loadIframe("boot");
   </script>
 </body>
 </html>
