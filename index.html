@@ -210,8 +210,12 @@
         .then((reg) => {
           // nếu SW đổi controller => reload để tránh trắng do file mới/cũ lẫn nhau
           navigator.serviceWorker.addEventListener("controllerchange", () => {
+            // chỉ cho reload 1 lần mỗi phiên để tránh vòng lặp
+            if (sessionStorage.getItem("sw_reloaded") === "1") return;
+            sessionStorage.setItem("sw_reloaded", "1");
             location.reload();
           });
+
 
           // nếu có bản mới chờ => kích hoạt luôn
           if (reg.waiting) reg.waiting.postMessage("SKIP_WAITING");
