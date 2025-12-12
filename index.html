@@ -5,14 +5,17 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>24h CẮT ĐIỆN</title>
 
+  <!-- Manifest & PWA -->
   <link rel="manifest" href="manifest.webmanifest">
   <meta name="theme-color" content="#0ea5e9">
   <link rel="apple-touch-icon" href="evn_logo.png">
   <link rel="canonical" href="https://dlthoibinh.github.io/24H_CATDIEN/">
 
+  <!-- iOS -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
+  <!-- CSP -->
   <meta http-equiv="Content-Security-Policy"
         content="
           default-src 'self';
@@ -37,7 +40,7 @@
 
     .overlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:#ffffff}
     .overlay.show{display:flex}
-    .card{width:min(520px,92vw);border:1px solid #e5e7eb;border-radius:16px;padding:14px 14px 12px;background:#fff;box-shadow:0 12px 30px rgba(0,0,0,.08)}
+    .card{width:min(560px,92vw);border:1px solid #e5e7eb;border-radius:16px;padding:14px;background:#fff;box-shadow:0 12px 30px rgba(0,0,0,.08)}
     .row{display:flex;gap:12px;align-items:center}
     .spinner{width:22px;height:22px;border-radius:50%;border:3px solid #e5e7eb;border-top-color:#0ea5e9;animation:spin 1s linear infinite}
     @keyframes spin{to{transform:rotate(360deg)}}
@@ -59,6 +62,7 @@
       <iframe id="app"
         src="about:blank"
         loading="eager"
+        referrerpolicy="no-referrer"
         allow="geolocation *; fullscreen *; camera *; microphone *; clipboard-read; clipboard-write; accelerometer; gyroscope; magnetometer; storage-access-by-user-activation *">
       </iframe>
 
@@ -68,12 +72,12 @@
             <div class="spinner"></div>
             <div>
               <div id="status" class="status">Đang tải ứng dụng…</div>
-              <div id="hint" class="hint">Nếu treo lâu, bấm Tải lại hoặc Mở ngoài trình duyệt.</div>
+              <div id="hint" class="hint">Nếu treo lâu, bấm Tải lại hoặc Mở trực tiếp.</div>
             </div>
           </div>
           <div class="actions">
             <button id="btnReload" class="primary">Tải lại</button>
-            <button id="btnOpen">Mở ngoài trình duyệt</button>
+            <button id="btnDirect">Mở trực tiếp</button>
           </div>
         </div>
       </div>
@@ -90,100 +94,126 @@
   </div>
 
   <script>
+    // ==== CONFIG (đổi đúng 1 chỗ này nếu anh đổi link GAS) ====
     const GAS_URL = "https://script.google.com/macros/s/AKfycbxXRbDDCz6J21IRJeskHvVtIuKtofn7ZTM8Y0ndw62drizcpAgwGn1TGQplfkx929Rg/exec";
-    const GAS_ORIGINS = new Set(["https://script.google.com", "https://script.googleusercontent.com"]);
 
+    // thời gian chờ trước khi coi là “trắng/treo”
+    const WATCHDOG_MS = 15000;
+
+    // quá thời gian này thì tự chuyển sang mở trực tiếp (top-level) để né chặn session trong iframe
+    const AUTO_DIRECT_MS = 22000;
+
+    // ==== BASE (GitHub Pages subfolder safe) ====
     const BASE = (location.pathname.endsWith("/")
       ? location.pathname
       : location.pathname.replace(/\/[^/]*$/, "/"));
 
-    const $overlay = document.getElementById("overlay");
-    const $status  = document.getElementById("status");
-    const $hint    = document.getElementById("hint");
-    const $iframe  = document.getElementById("app");
+    // ==== UI refs ====
+    const iframe  = document.getElementById("app");
+    const overlay = document.getElementById("overlay");
+    const statusEl= document.getElementById("status");
+    const hintEl  = document.getElementById("hint");
 
-    const setOfflineUI = on => document.getElementById("offline").classList.toggle("show", !!on);
-    addEventListener("online",  ()=>setOfflineUI(false));
-    addEventListener("offline", ()=>setOfflineUI(true));
+    const setOfflineUI = (on) => document.getElementById("offline").classList.toggle("show", !!on);
+    addEventListener("online",  () => setOfflineUI(false));
+    addEventListener("offline", () => setOfflineUI(true));
     setOfflineUI(!navigator.onLine);
 
+    function showOverlay(text, hint){
+      statusEl.textContent = text || "Đang tải ứng dụng…";
+      hintEl.textContent   = hint || "Nếu treo lâu, bấm Tải lại hoặc Mở trực tiếp.";
+      overlay.classList.add("show");
+    }
+    function hideOverlay(){ overlay.classList.remove("show"); }
+
+    function openDirect(){
+      // top-level mở trực tiếp GAS: ổn định nhất khi iframe bị chặn cookie/session
+      const u = new URL(GAS_URL);
+      u.searchParams.set("source", "pwa");
+      u.searchParams.set("_ts", String(Date.now()));
+      location.replace(u.toString());
+    }
+
+    // ==== LOAD + WATCHDOG ====
     let ready = false;
     let tries = 0;
-    let watchdog = null;
+    let tWatch = null;
+    let tAuto  = null;
 
-    function showOverlay(text, hint){
-      $status.textContent = text || "Đang tải ứng dụng…";
-      $hint.textContent = hint || "Nếu treo lâu, bấm Tải lại hoặc Mở ngoài trình duyệt.";
-      $overlay.classList.add("show");
-    }
-
-    function hideOverlay(){
-      $overlay.classList.remove("show");
-    }
-
-    function startWatchdog(){
-      clearTimeout(watchdog);
-      watchdog = setTimeout(() => {
-        if (ready) return;
-        showOverlay(
-          "Không tải được (màn hình trắng)",
-          "Nguyên nhân hay gặp: iframe bị chặn session/cookie hoặc mạng chập chờn. Bấm Tải lại, hoặc Mở ngoài trình duyệt."
-        );
-        // auto retry nhẹ 1 lần
-        if (tries < 3) loadIframe("retry");
-      }, 20000);
+    function clearTimers(){
+      if (tWatch) clearTimeout(tWatch);
+      if (tAuto)  clearTimeout(tAuto);
+      tWatch = null; tAuto = null;
     }
 
     function loadIframe(reason){
       tries += 1;
       ready = false;
-      showOverlay(`Đang tải ứng dụng… (lần ${tries})`);
+      clearTimers();
+
+      showOverlay(
+        `Đang tải ứng dụng… (lần ${tries})`,
+        "Nếu treo lâu, bấm Tải lại hoặc Mở trực tiếp."
+      );
 
       const u = new URL(GAS_URL);
       u.searchParams.set("source", "pwa");
-      u.searchParams.set("_ts", String(Date.now())); // chống treo do cache/session
+      u.searchParams.set("_ts", String(Date.now()));
 
-      // trick nhỏ: set about:blank trước để ép refresh iframe trên iOS/PWA
-      $iframe.src = "about:blank";
-      requestAnimationFrame(() => { $iframe.src = u.toString(); });
+      // ép iOS/PWA refresh iframe: about:blank trước
+      iframe.src = "about:blank";
+      requestAnimationFrame(() => { iframe.src = u.toString(); });
 
-      startWatchdog();
+      // watchdog: quá WATCHDOG_MS mà chưa ready => báo trắng và cho nút xử lý
+      tWatch = setTimeout(() => {
+        if (ready) return;
+        showOverlay(
+          "Có thể bị màn hình trắng/treo khi chạy trong iframe",
+          "Bấm Mở trực tiếp để vào ngay (ổn định nhất). Hoặc bấm Tải lại."
+        );
+      }, WATCHDOG_MS);
+
+      // auto-direct: quá AUTO_DIRECT_MS mà vẫn chưa ready => tự chuyển sang mở trực tiếp
+      tAuto = setTimeout(() => {
+        if (!ready) openDirect();
+      }, AUTO_DIRECT_MS);
     }
 
-    // Nếu anh có chèn postMessage "GAS_READY" trong Apps Script (mục 2), overlay sẽ tắt đúng lúc
+    // Nếu anh chèn postMessage GAS_READY trong Apps Script thì wrapper sẽ nhận được và tắt overlay đúng lúc
     addEventListener("message", (ev) => {
-      if (!GAS_ORIGINS.has(ev.origin)) return;
+      if (ev.origin !== "https://script.google.com" && ev.origin !== "https://script.googleusercontent.com") return;
       const data = ev.data || {};
       if (data && data.type === "GAS_READY") {
         ready = true;
-        clearTimeout(watchdog);
+        clearTimers();
         hideOverlay();
       }
     });
 
-    // Fallback: nếu iframe load xong nhưng không có handshake, vẫn cho qua sau 5s để khỏi kẹt
-    $iframe.addEventListener("load", () => {
+    // fallback: iframe load xong thì cho qua sau 3s để khỏi kẹt overlay (nếu không có GAS_READY)
+    iframe.addEventListener("load", () => {
       setTimeout(() => {
-        if (!ready) hideOverlay();
-      }, 5000);
+        if (!ready) {
+          ready = true;
+          clearTimers();
+          hideOverlay();
+        }
+      }, 3000);
     });
 
     document.getElementById("btnReload").addEventListener("click", () => loadIframe("manual"));
-    document.getElementById("btnOpen").addEventListener("click", () => {
-      // mở top-level để né chặn cookie iframe (nhất là iOS/Brave)
-      window.open(GAS_URL, "_blank", "noopener,noreferrer");
-    });
+    document.getElementById("btnDirect").addEventListener("click", () => openDirect());
 
-    // Service Worker: auto cập nhật và reload 1 lần khi đổi controller
+    // ==== SERVICE WORKER (auto cập nhật) ====
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register(BASE + "sw.js", { scope: BASE })
         .then((reg) => {
+          // nếu SW đổi controller => reload để tránh trắng do file mới/cũ lẫn nhau
           navigator.serviceWorker.addEventListener("controllerchange", () => {
-            // đổi SW => reload để tránh trắng do bản cũ/bản mới lẫn nhau
             location.reload();
           });
 
-          // nếu có bản mới đang chờ, bắt nó kích hoạt luôn
+          // nếu có bản mới chờ => kích hoạt luôn
           if (reg.waiting) reg.waiting.postMessage("SKIP_WAITING");
 
           reg.addEventListener("updatefound", () => {
@@ -199,7 +229,7 @@
         .catch((e) => console.warn("SW register failed:", e));
     }
 
-    // Start
+    // START
     loadIframe("boot");
   </script>
 </body>
